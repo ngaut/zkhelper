@@ -1,5 +1,5 @@
 // zookeeper helper functions
-// modified from Vitess project: github.com/ngaut/vitess
+// modified from Vitess project
 
 package zkhelper
 
@@ -41,6 +41,14 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
+func ConnectToZk(zkAddr string) (zkhelper.Conn, error) {
+	zkConn, _, err := zookeeper.Connect(strings.Split(zkAddr, ","), 3*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return zkConn, nil
+}
+
 func DefaultACLs() []zookeeper.ACL {
 	return zookeeper.WorldACL(zookeeper.PermAll)
 }
@@ -51,14 +59,6 @@ func DefaultDirACLs() []zookeeper.ACL {
 
 func DefaultFileACLs() []zookeeper.ACL {
 	return zookeeper.WorldACL(PERM_FILE)
-}
-
-func ConnectToZk(zkAddr string) (zkhelper.Conn, error) {
-	zkConn, _, err := zookeeper.Connect(strings.Split(zkAddr, ","), 3*time.Second)
-	if err != nil {
-		return nil, err
-	}
-	return zkConn, nil
 }
 
 // IsDirectory returns if this node should be treated as a directory.
@@ -512,8 +512,8 @@ func CreatePidNode(zconn Conn, zkPath string, contents string, done chan struct{
 
 // ZLocker is an interface for a lock that can fail.
 type ZLocker interface {
-	Lock() error
-	LockWithTimeout(wait time.Duration) error
+	Lock(desc string) error
+	LockWithTimeout(wait time.Duration, desc string) error
 	Unlock() error
 	Interrupt()
 }
@@ -540,7 +540,7 @@ func CreateMutex(zconn Conn, zkPath string) ZLocker {
 		panic(err) // should never happen
 	}
 	pid := os.Getpid()
-	contents := fmt.Sprintf(`{"hostname": "%v", "pid": %v}`, hostname, pid)
+	contents := fmt.Sprintf(` {"hostname": "%v", "pid": %v} `, hostname, pid)
 
 	return &zMutex{zconn: zconn, path: zkPath, contents: contents, interrupted: make(chan struct{})}
 }
@@ -555,8 +555,8 @@ func (zm *zMutex) Interrupt() {
 }
 
 // Lock returns nil when the lock is acquired.
-func (zm *zMutex) Lock() error {
-	return zm.LockWithTimeout(365 * 24 * time.Hour)
+func (zm *zMutex) Lock(desc string) error {
+	return zm.LockWithTimeout(365*24*time.Hour, desc)
 }
 
 // LockWithTimeout returns nil when the lock is acquired. A lock is
@@ -564,7 +564,7 @@ func (zm *zMutex) Lock() error {
 // to zero makes this a nonblocking lock check.
 //
 // FIXME(msolo) Disallow non-super users from removing the lock?
-func (zm *zMutex) LockWithTimeout(wait time.Duration) (err error) {
+func (zm *zMutex) LockWithTimeout(wait time.Duration, desc string) (err error) {
 	timer := time.NewTimer(wait)
 	defer func() {
 		if panicErr := recover(); panicErr != nil || err != nil {
@@ -586,7 +586,7 @@ func (zm *zMutex) LockWithTimeout(wait time.Duration) (err error) {
 	}
 
 createlock:
-	lockCreated, err := zm.zconn.Create(lockPrefix, []byte(zm.contents), int32(zflags), zookeeper.WorldACL(PERM_FILE))
+	lockCreated, err := zm.zconn.Create(lockPrefix, []byte(zm.contents+desc), int32(zflags), zookeeper.WorldACL(PERM_FILE))
 	if err != nil {
 		return err
 	}
@@ -747,7 +747,7 @@ func (ze *ZElector) RunTask(task ElectorTask) error {
 	}
 
 	for {
-		err := ze.Lock()
+		err := ze.Lock("RunTask")
 		if err != nil {
 			log.Warningf("election lock failed: %v", err)
 			if err == ErrInterrupted {
