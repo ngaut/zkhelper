@@ -226,6 +226,16 @@ func TestSequence(t *testing.T) {
 	if wanted := "/zk/0000000003"; newPath != wanted {
 		t.Errorf("new path: got %q, wanted %q", newPath, wanted)
 	}
+
+	newPath, err = conn.Create("/zk/action_", nil, zk.FlagSequence, zk.WorldACL(zk.PermAll))
+	if err != nil {
+		t.Errorf("conn.Create: %v", err)
+	}
+
+	if wanted := "/zk/action_0000000004"; newPath != wanted {
+		t.Errorf("new path: got %q, wanted %q", newPath, wanted)
+	}
+
 }
 
 /*

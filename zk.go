@@ -433,14 +433,6 @@ func ZkEventOk(e zk.Event) bool {
 
 func NodeExists(zconn Conn, zkPath string) (bool, error) {
 	b, _, err := zconn.Exists(zkPath)
-	if err == zk.ErrNoNode {
-		return false, nil
-	}
-
-	if err == nil {
-		return b, nil
-	}
-
 	return b, err
 }
 

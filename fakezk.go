@@ -159,11 +159,12 @@ func (conn *zconn) Exists(zkPath string) (exist bool, stat zk.Stat, err error) {
 	// FIXME(szopa): if the path is bad, Op will be "get."
 	exist = false
 	_, stat, err = conn.Get(zkPath)
-	if err != nil && ZkErrorEqual(err, zk.ErrNoNode) {
-		err = nil
+	if err != nil {
+		if ZkErrorEqual(err, zk.ErrNoNode) {
+			err = nil
+		}
 	}
 
-	exist = true
 	return exist, stat, err
 }
 
