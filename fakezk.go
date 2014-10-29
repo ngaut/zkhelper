@@ -163,6 +163,8 @@ func (conn *zconn) Exists(zkPath string) (exist bool, stat zk.Stat, err error) {
 		if ZkErrorEqual(err, zk.ErrNoNode) {
 			err = nil
 		}
+	} else {
+		exist = true
 	}
 
 	return exist, stat, err
@@ -211,9 +213,9 @@ func (conn *zconn) Create(zkPath string, value []byte, flags int32, aclv []zk.AC
 
 	zxid := conn.getZxid()
 	name := rest[0]
-	if (flags&zk.FlagSequence) != 0 && name == "" {
+	if (flags & zk.FlagSequence) != 0 {
 		sequence := node.nextSequence()
-		name = sequence
+		name += sequence
 		zkPath = zkPath + sequence
 	}
 
