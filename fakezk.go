@@ -121,6 +121,8 @@ func (conn *zconn) Children(zkPath string) (children []string, stat zk.Stat, err
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
+	//println("Children:", conn.String())
+
 	node, _, rest, err := conn.getNode(zkPath, "children")
 	if err != nil {
 		return nil, nil, err
@@ -138,6 +140,8 @@ func (conn *zconn) Children(zkPath string) (children []string, stat zk.Stat, err
 func (conn *zconn) ChildrenW(zkPath string) (children []string, stat zk.Stat, watch <-chan zk.Event, err error) {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
+
+	//println("ChildrenW:", conn.String())
 
 	node, _, rest, err := conn.getNode(zkPath, "childrenw")
 	if err != nil {

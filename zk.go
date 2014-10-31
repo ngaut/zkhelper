@@ -623,12 +623,12 @@ trylock:
 	}
 
 	zkPrevLock := path.Join(zm.path, prevLock)
-	_, stat, watch, err := zm.zconn.ExistsW(zkPrevLock)
+	exist, stat, watch, err := zm.zconn.ExistsW(zkPrevLock)
 	if err != nil {
 		// FIXME(msolo) Should this be a retry?
 		return fmt.Errorf("zkutil: unable to watch previous lock node %v %v", zkPrevLock, err)
 	}
-	if stat == nil {
+	if stat == nil || !exist {
 		goto trylock
 	}
 	select {
