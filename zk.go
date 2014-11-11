@@ -4,6 +4,7 @@
 package zkhelper
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -531,7 +532,7 @@ func CreateMutex(zconn Conn, zkPath string) ZLocker {
 		panic(err) // should never happen
 	}
 	pid := os.Getpid()
-	contents := fmt.Sprintf(` {"hostname": "%v", "pid": %v} `, hostname, pid)
+	contents := fmt.Sprintf(`{"hostname": "%v", "pid": %v}`, hostname, pid)
 
 	return &zMutex{zconn: zconn, path: zkPath, contents: contents, interrupted: make(chan struct{})}
 }
@@ -576,8 +577,20 @@ func (zm *zMutex) LockWithTimeout(wait time.Duration, desc string) (err error) {
 		zflags = zflags | zk.FlagEphemeral
 	}
 
+	// update node content
+	var lockContent map[string]interface{}
+	err = json.Unmarshal([]byte(zm.contents), &lockContent)
+	if err != nil {
+		return err
+	}
+	lockContent["desc"] = desc
+	newContent, err := json.Marshal(lockContent)
+	if err != nil {
+		return err
+	}
+
 createlock:
-	lockCreated, err := zm.zconn.Create(lockPrefix, []byte(zm.contents+desc), int32(zflags), zk.WorldACL(PERM_FILE))
+	lockCreated, err := zm.zconn.Create(lockPrefix, newContent, int32(zflags), zk.WorldACL(PERM_FILE))
 	if err != nil {
 		return err
 	}
