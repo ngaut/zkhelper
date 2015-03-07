@@ -155,10 +155,30 @@ func (e *etcdImpl) Create(wholepath string, value []byte, flags int32, aclv []zk
 	}
 
 	fn := e.c.Create
+	log.Info("create", wholepath)
 
 	if seq {
 		wholepath = path.Dir(wholepath)
 		fn = e.c.CreateInOrder
+	} else {
+		for _, v := range aclv {
+			if v.Perms == PERM_DIRECTORY {
+				log.Info("etcdImpl:create directory", wholepath)
+				fn = nil
+				_, err := e.c.CreateDir(wholepath, uint64(ttl))
+				if err != nil {
+					log.Warning("etcdImpl:create directory", wholepath, err)
+					return "", convertToZkError(err)
+				}
+			}
+		}
+	}
+
+	if fn == nil {
+		if tmp {
+			e.keepAlive(wholepath)
+		}
+		return wholepath, nil
 	}
 
 	resp, err := fn(wholepath, string(value), uint64(ttl))
