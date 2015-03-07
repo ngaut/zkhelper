@@ -77,7 +77,6 @@ func TestBasic(t *testing.T) {
 	}
 	_, stat, err := conn.Exists("/zk/foo")
 	if err != nil {
-		println(conn.(*zconn).String())
 		t.Errorf("conn.Exists: %v", err)
 	}
 	if stat != nil {
@@ -128,7 +127,7 @@ func TestWatches(t *testing.T) {
 		t.Errorf("stat is not nil: %v", stat)
 	}
 
-	if _, err := conn.Create("/zk", nil, 0, zk.WorldACL(zk.PermAll)); err != nil {
+	if _, err := conn.Create("/zk", nil, 0, zk.WorldACL(zk.PermAll)); err == nil {
 		t.Fatalf("conn.Create: %v", err)
 	}
 
@@ -187,7 +186,8 @@ func fireWatch(t *testing.T, watch <-chan zk.Event) zk.Event {
 	case <-timer.C:
 		t.Errorf("watch didn't get event")
 	}
-	panic("unreachable")
+
+	return zk.Event{}
 }
 
 func TestSequence(t *testing.T) {
