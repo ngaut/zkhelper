@@ -5,6 +5,7 @@
 package zkhelper
 
 import (
+	"errors"
 	"sort"
 	"testing"
 	"time"
@@ -117,21 +118,25 @@ func TestWatches(t *testing.T) {
 	conn := NewConn()
 	defer conn.Close()
 
-	// Creating sends an event to ExistsW.
-
-	_, stat, watch, err := conn.ExistsW("/zk")
-	if err != nil {
-		t.Errorf("conn.ExistsW: %v", err)
-	}
-	if stat != nil {
-		t.Errorf("stat is not nil: %v", stat)
-	}
-
-	if _, err := conn.Create("/zk", nil, 0, zk.WorldACL(zk.PermAll)); err == nil {
+	if _, err := conn.Create("/zk", nil, 0, zk.WorldACL(zk.PermAll)); err != nil {
 		t.Fatalf("conn.Create: %v", err)
 	}
 
-	fireWatch(t, watch)
+	if _, err := conn.Create("/zk/foo", []byte("foo"), 0, zk.WorldACL(zk.PermAll)); err != nil {
+		t.Fatalf("conn.Create: %v", err)
+	}
+	_, _, watch, err := conn.ExistsW("/zk/foo")
+	if err != nil {
+		t.Errorf("conn.ExistsW: %v", err)
+	}
+
+	if err := conn.Delete("/zk/foo", -1); err != nil {
+		t.Error(err)
+	}
+
+	if err := fireWatch(t, watch); err != nil {
+		t.Error(err)
+	}
 
 	// Creating a child sends an event to ChildrenW.
 	_, _, watch, err = conn.ChildrenW("/zk")
@@ -173,21 +178,21 @@ func TestWatches(t *testing.T) {
 
 	fireWatch(t, watch)
 	fireWatch(t, parentWatch)
-
 }
 
-func fireWatch(t *testing.T, watch <-chan zk.Event) zk.Event {
+func fireWatch(t *testing.T, watch <-chan zk.Event) error {
 	timer := time.NewTimer(50 * time.Millisecond)
 	select {
-	case event := <-watch:
+	case <-watch:
 		// TODO(szopa): Figure out what's the exact type of
 		// event.
-		return event
+		return nil
 	case <-timer.C:
 		t.Errorf("watch didn't get event")
+		return errors.New("timeout")
 	}
 
-	return zk.Event{}
+	return errors.New("timeout")
 }
 
 func TestSequence(t *testing.T) {
