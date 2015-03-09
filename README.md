@@ -1,4 +1,4 @@
-zkhelper
+Coordinator
 ========
 
-zookeeper helper 
+Support both zookeeper and etcd 
