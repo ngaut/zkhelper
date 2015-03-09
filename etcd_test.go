@@ -5,19 +5,22 @@
 package zkhelper
 
 import (
-	"errors"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/ngaut/go-zookeeper/zk"
 )
 
 // Make sure Stat implements the interface.
 var _ zk.Stat = stat{}
+var testServer = "http://localhost:4001"
 
-func TestBasic(t *testing.T) {
-	conn := NewConn()
+func TestEtcdBasic(t *testing.T) {
+	conn, _ := NewEtcdConn(testServer)
+	err := DeleteRecursive(conn, "/zk", -1)
+	if err != nil {
+		t.Error(err)
+	}
 	defer conn.Close()
 
 	// Make sure Conn implements the interface.
@@ -26,7 +29,7 @@ func TestBasic(t *testing.T) {
 		t.Fatalf("conn.Create: %v", err)
 	}
 
-	if _, err := conn.Create("/zk/foo", []byte("foo"), 0, zk.WorldACL(zk.PermAll)); err != nil {
+	if _, err := conn.Create("/zk/foo", []byte("foo"), 0, zk.WorldACL(PERM_FILE)); err != nil {
 		t.Fatalf("conn.Create: %v", err)
 	}
 	data, _, err := conn.Get("/zk/foo")
@@ -68,10 +71,6 @@ func TestBasic(t *testing.T) {
 	if _, err := conn.Create("/zk/foo", []byte("foo"), 0, zk.WorldACL(zk.PermAll)); err == nil {
 		t.Errorf("conn.Create with a node that exists: expected error")
 	}
-	// Try Create with a node whose parents don't exist.
-	if _, err := conn.Create("/a/b/c", []byte("foo"), 0, zk.WorldACL(zk.PermAll)); err == nil {
-		t.Errorf("conn.Create with a node whose parents don't exist: expected error")
-	}
 
 	if err := conn.Delete("/zk/foo", -1); err != nil {
 		t.Errorf("conn.Delete: %v", err)
@@ -83,12 +82,16 @@ func TestBasic(t *testing.T) {
 	if stat != nil {
 		t.Errorf("/zk/foo should be deleted, got: %v", stat)
 	}
-
 }
 
-func TestChildren(t *testing.T) {
-	conn := NewConn()
+func TestEtcdChildren(t *testing.T) {
+	conn, _ := NewEtcdConn(testServer)
+	err := DeleteRecursive(conn, "/zk", -1)
+	if err != nil {
+		t.Error(err)
+	}
 	defer conn.Close()
+
 	nodes := []string{"/zk", "/zk/foo", "/zk/bar"}
 	wantChildren := []string{"bar", "foo"}
 	for _, path := range nodes {
@@ -111,51 +114,57 @@ func TestChildren(t *testing.T) {
 			break
 		}
 	}
-
 }
 
-func TestWatches(t *testing.T) {
-	conn := NewConn()
+func TestEtcdWatches(t *testing.T) {
+	conn, _ := NewEtcdConn(testServer)
+	err := DeleteRecursive(conn, "/zk", -1)
+	if err != nil {
+		t.Error(err)
+	}
 	defer conn.Close()
 
+	// Creating sends an event to ExistsW.
 	if _, err := conn.Create("/zk", nil, 0, zk.WorldACL(zk.PermAll)); err != nil {
 		t.Fatalf("conn.Create: %v", err)
 	}
 
-	if _, err := conn.Create("/zk/foo", []byte("foo"), 0, zk.WorldACL(zk.PermAll)); err != nil {
+	if _, err := conn.Create("/zk/foo", nil, 0, zk.WorldACL(PERM_FILE)); err != nil {
 		t.Fatalf("conn.Create: %v", err)
 	}
-	_, _, watch, err := conn.ExistsW("/zk/foo")
+
+	_, stat, watch, err := conn.ExistsW("/zk/foo")
 	if err != nil {
 		t.Errorf("conn.ExistsW: %v", err)
 	}
-
-	if err := conn.Delete("/zk/foo", -1); err != nil {
-		t.Error(err)
+	if stat != nil {
+		t.Errorf("stat is not nil: %v", stat)
 	}
 
-	if err := fireWatch(t, watch); err != nil {
-		t.Error(err)
+	if _, err := conn.Set("/zk/foo", []byte("bar"), -1); err != nil {
+		t.Fatalf("conn.Set: %v", err)
 	}
+
+	fireWatch(t, watch)
 
 	// Creating a child sends an event to ChildrenW.
 	_, _, watch, err = conn.ChildrenW("/zk")
 	if err != nil {
 		t.Errorf(`conn.ChildrenW("/zk"): %v`, err)
 	}
-	if _, err := conn.Create("/zk/foo", nil, 0, zk.WorldACL(zk.PermAll)); err != nil {
+	if _, err := conn.Create("/zk/bar", nil, 0, zk.WorldACL(PERM_FILE)); err != nil {
 		t.Fatalf("conn.Create: %v", err)
 	}
 
 	fireWatch(t, watch)
 	// Updating sends an event to GetW.
 
-	_, _, watch, err = conn.GetW("/zk")
+	_, _, watch, err = conn.GetW("/zk/foo")
 	if err != nil {
 		t.Errorf(`conn.GetW("/zk"): %v`, err)
 	}
 
-	if _, err := conn.Set("/zk", []byte("foo"), -1); err != nil {
+	if _, err := conn.Set("/zk/foo", []byte("foo"), -1); err != nil {
 		t.Errorf("conn.Set /zk: %v", err)
 	}
 	fireWatch(t, watch)
@@ -178,74 +187,45 @@ func TestWatches(t *testing.T) {
 
 	fireWatch(t, watch)
 	fireWatch(t, parentWatch)
+
 }
 
-func fireWatch(t *testing.T, watch <-chan zk.Event) error {
-	timer := time.NewTimer(50 * time.Millisecond)
-	select {
-	case <-watch:
-		// TODO(szopa): Figure out what's the exact type of
-		// event.
-		return nil
-	case <-timer.C:
-		t.Errorf("watch didn't get event")
-		return errors.New("timeout")
+func TestEtcdSequence(t *testing.T) {
+	conn, _ := NewEtcdConn(testServer)
+	err := DeleteRecursive(conn, "/zk", -1)
+	if err != nil {
+		t.Error(err)
 	}
-
-	return errors.New("timeout")
-}
-
-func TestSequence(t *testing.T) {
-	conn := NewConn()
 	defer conn.Close()
+
 	if _, err := conn.Create("/zk", nil, 0, zk.WorldACL(zk.PermAll)); err != nil {
 		t.Fatalf("conn.Create: %v", err)
 	}
 
-	newPath, err := conn.Create("/zk/", nil, zk.FlagSequence, zk.WorldACL(zk.PermAll))
-	if err != nil {
-		t.Errorf("conn.Create: %v", err)
-	}
-	if wanted := "/zk/0000000001"; newPath != wanted {
-		t.Errorf("new path: got %q, wanted %q", newPath, wanted)
-	}
-
-	newPath, err = conn.Create("/zk/", nil, zk.FlagSequence, zk.WorldACL(zk.PermAll))
+	_, err = conn.Create("/zk/", nil, zk.FlagSequence, zk.WorldACL(zk.PermAll))
 	if err != nil {
 		t.Errorf("conn.Create: %v", err)
 	}
 
-	if wanted := "/zk/0000000002"; newPath != wanted {
-		t.Errorf("new path: got %q, wanted %q", newPath, wanted)
-	}
-
-	if err := conn.Delete("/zk/0000000002", -1); err != nil {
-		t.Fatalf("conn.Delete: %v", err)
-	}
-
-	newPath, err = conn.Create("/zk/", nil, zk.FlagSequence, zk.WorldACL(zk.PermAll))
+	_, err = conn.Create("/zk/", nil, zk.FlagSequence, zk.WorldACL(zk.PermAll))
 	if err != nil {
 		t.Errorf("conn.Create: %v", err)
 	}
 
-	if wanted := "/zk/0000000003"; newPath != wanted {
-		t.Errorf("new path: got %q, wanted %q", newPath, wanted)
-	}
-
-	newPath, err = conn.Create("/zk/action_", nil, zk.FlagSequence, zk.WorldACL(zk.PermAll))
+	_, err = conn.Create("/zk/", nil, zk.FlagSequence, zk.WorldACL(zk.PermAll))
 	if err != nil {
 		t.Errorf("conn.Create: %v", err)
 	}
 
-	if wanted := "/zk/action_0000000004"; newPath != wanted {
-		t.Errorf("new path: got %q, wanted %q", newPath, wanted)
+	_, err = conn.Create("/zk/action_", nil, zk.FlagSequence, zk.WorldACL(zk.PermAll))
+	if err != nil {
+		t.Errorf("conn.Create: %v", err)
 	}
-
 }
 
 /*
 func TestFromFile(t *testing.T) {
-	conn := NewConnFromFile(testfiles.Locate("fakezk_test_config.json"))
+	conn := NewEtcdConnFromFile(testfiles.Locate("fakezk_test_config.json"))
 
 	keyspaces, _, err := conn.Children("/zk/testing/vt/ns")
 	if err != nil {

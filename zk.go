@@ -107,9 +107,9 @@ func CreateRecursive(zconn Conn, zkPath, value string, flags int, aclv []zk.ACL)
 
 func CreateOrUpdate(zconn Conn, zkPath, value string, flags int, aclv []zk.ACL, recursive bool) (pathCreated string, err error) {
 	if recursive {
-		pathCreated, err = CreateRecursive(zconn, zkPath, value, 0, zk.WorldACL(zk.PermAll))
+		pathCreated, err = CreateRecursive(zconn, zkPath, value, 0, aclv)
 	} else {
-		pathCreated, err = zconn.Create(zkPath, []byte(value), 0, zk.WorldACL(zk.PermAll))
+		pathCreated, err = zconn.Create(zkPath, []byte(value), 0, aclv)
 	}
 	if err != nil && ZkErrorEqual(err, zk.ErrNodeExists) {
 		pathCreated = ""
