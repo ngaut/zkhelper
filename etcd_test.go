@@ -71,10 +71,6 @@ func TestEtcdBasic(t *testing.T) {
 	if _, err := conn.Create("/zk/foo", []byte("foo"), 0, zk.WorldACL(zk.PermAll)); err == nil {
 		t.Errorf("conn.Create with a node that exists: expected error")
 	}
-	// Try Create with a node whose parents don't exist.
-	if _, err := conn.Create("/a/b/c", []byte("foo"), 0, zk.WorldACL(zk.PermAll)); err == nil {
-		t.Errorf("conn.Create with a node whose parents don't exist: expected error")
-	}
 
 	if err := conn.Delete("/zk/foo", -1); err != nil {
 		t.Errorf("conn.Delete: %v", err)
@@ -118,7 +114,6 @@ func TestEtcdChildren(t *testing.T) {
 			break
 		}
 	}
-
 }
 
 func TestEtcdWatches(t *testing.T) {

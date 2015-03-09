@@ -91,10 +91,13 @@ func (e *etcdImpl) GetW(key string) (data []byte, stat zk.Stat, watch <-chan zk.
 }
 
 func (e *etcdImpl) Children(key string) (children []string, stat zk.Stat, err error) {
+	log.Debug("Children", key)
 	resp, err := e.c.Get(key, true, false)
 	if resp == nil {
 		return nil, nil, convertToZkError(err)
 	}
+
+	log.Debugf("%+v", resp.Node)
 
 	for _, c := range resp.Node.Nodes {
 		children = append(children, path.Base(c.Key))
@@ -122,8 +125,6 @@ func (e *etcdImpl) Exists(key string) (exist bool, stat zk.Stat, err error) {
 		return true, nil, nil
 	}
 
-	log.Debugf("%T", err)
-
 	if ec, ok := err.(*etcd.EtcdError); ok {
 		if ec.ErrorCode == etcderr.EcodeKeyNotFound {
 			return false, nil, nil
@@ -144,13 +145,19 @@ func (e *etcdImpl) ExistsW(key string) (exist bool, stat zk.Stat, watch <-chan z
 
 const MAX_TTL = 365 * 24 * 60 * 60
 
+//todo:add test for keepAlive
 func (e *etcdImpl) keepAlive(key string) {
 	go func() {
 		for {
 			time.Sleep(1 * time.Second)
-			resp, err := e.c.Get(key, true, false)
+			resp, err := e.c.Get(key, false, false)
 			if resp == nil {
 				log.Error(err)
+				return
+			}
+
+			if resp.Node.Dir {
+				log.Error("can not set ttl to directory")
 				return
 			}
 
