@@ -73,6 +73,8 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 			return
 		}
 
+		log.Infof("got event %+v, %+v", resp, resp.Node)
+
 		ch <- convertToZkEvent(resp, err)
 		index = resp.EtcdIndex
 		//	}
@@ -96,8 +98,6 @@ func (e *etcdImpl) Children(key string) (children []string, stat zk.Stat, err er
 	if resp == nil {
 		return nil, nil, convertToZkError(err)
 	}
-
-	log.Debugf("%+v", resp.Node)
 
 	for _, c := range resp.Node.Nodes {
 		children = append(children, path.Base(c.Key))
@@ -146,22 +146,23 @@ func (e *etcdImpl) ExistsW(key string) (exist bool, stat zk.Stat, watch <-chan z
 const MAX_TTL = 365 * 24 * 60 * 60
 
 //todo:add test for keepAlive
-func (e *etcdImpl) keepAlive(key string) {
+func (e *etcdImpl) keepAlive(key string, ttl uint64) {
 	go func() {
 		for {
+			log.Info("try watch", key)
 			time.Sleep(1 * time.Second)
 			resp, err := e.c.Get(key, false, false)
-			if resp == nil {
+			if err != nil {
 				log.Error(err)
 				return
 			}
 
 			if resp.Node.Dir {
-				log.Error("can not set ttl to directory")
+				log.Error("can not set ttl to directory", key)
 				return
 			}
 
-			resp, err = e.c.Set(key, resp.Node.Value, uint64(resp.Node.TTL))
+			resp, err = e.c.Set(key, resp.Node.Value, ttl)
 			if resp == nil {
 				log.Error(err)
 				return
@@ -173,10 +174,12 @@ func (e *etcdImpl) keepAlive(key string) {
 func (e *etcdImpl) Create(wholekey string, value []byte, flags int32, aclv []zk.ACL) (keyCreated string, err error) {
 	seq := (flags & zk.FlagSequence) != 0
 	tmp := (flags & zk.FlagEphemeral) != 0
-	ttl := time.Duration(MAX_TTL)
+	ttl := uint64(MAX_TTL)
 	if tmp {
-		ttl = 2 * time.Second
+		ttl = 5
 	}
+
+	var resp *etcd.Response
 
 	fn := e.c.Create
 	log.Info("create", wholekey)
@@ -189,7 +192,7 @@ func (e *etcdImpl) Create(wholekey string, value []byte, flags int32, aclv []zk.
 			if v.Perms == PERM_DIRECTORY {
 				log.Info("etcdImpl:create directory", wholekey)
 				fn = nil
-				_, err := e.c.CreateDir(wholekey, uint64(ttl))
+				resp, err = e.c.CreateDir(wholekey, uint64(ttl))
 				if err != nil {
 					log.Warning("etcdImpl:create directory", wholekey, err)
 					return "", convertToZkError(err)
@@ -200,21 +203,21 @@ func (e *etcdImpl) Create(wholekey string, value []byte, flags int32, aclv []zk.
 
 	if fn == nil {
 		if tmp {
-			e.keepAlive(wholekey)
+			e.keepAlive(wholekey, ttl)
 		}
-		return wholekey, nil
+		return resp.Node.Key, nil
 	}
 
-	resp, err := fn(wholekey, string(value), uint64(ttl))
+	resp, err = fn(wholekey, string(value), uint64(ttl))
 	if err != nil {
 		return "", convertToZkError(err)
 	}
 
 	if tmp {
-		e.keepAlive(wholekey + resp.Node.Key)
+		e.keepAlive(resp.Node.Key, ttl)
 	}
 
-	return wholekey + resp.Node.Key, nil
+	return resp.Node.Key, nil
 }
 
 func (e *etcdImpl) Set(key string, value []byte, version int32) (stat zk.Stat, err error) {
