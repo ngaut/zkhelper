@@ -35,6 +35,7 @@ func convertToZkError(err error) error {
 }
 
 func convertToZkEvent(resp *etcd.Response, err error) zk.Event {
+	//todo:implementation
 	return zk.Event{}
 }
 
