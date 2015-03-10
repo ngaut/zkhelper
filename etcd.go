@@ -51,6 +51,7 @@ func convertToZkError(err error) error {
 }
 
 func convertToZkEvent(resp *etcd.Response, err error) zk.Event {
+	log.Infof("convert event %+v, %+v", resp, resp.Node)
 	//todo:implementation
 	return zk.Event{}
 }
@@ -63,6 +64,7 @@ func NewEtcdConn(zkAddr string) (Conn, error) {
 	}
 
 	p := pools.NewResourcePool(func() (pools.Resource, error) {
+		log.Info("create a new etcd client")
 		return &PooledEtcdClient{c: etcd.NewClient(strings.Split(zkAddr, ","))}, nil
 	}, 10, 10, 0)
 
@@ -110,6 +112,14 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 	ch := make(chan zk.Event, 100)
 
 	go func(index uint64) {
+		conn, err := e.pool.Get()
+		if err != nil {
+			return
+		}
+
+		defer e.pool.Put(conn)
+		c := conn.(*PooledEtcdClient).c
+
 		//for {
 		//todo: should we use resp.Nodes's index or its children's max index
 		resp, err := c.Watch(key, index, children, nil, nil)
@@ -167,7 +177,7 @@ func (e *etcdImpl) ChildrenW(key string) (children []string, stat zk.Stat, watch
 	}
 
 	for _, c := range resp.Node.Nodes {
-		children = append(children, c.Key)
+		children = append(children, path.Base(c.Key))
 	}
 
 	return
@@ -207,36 +217,40 @@ func (e *etcdImpl) ExistsW(key string) (exist bool, stat zk.Stat, watch <-chan z
 
 const MAX_TTL = 365 * 24 * 60 * 60
 
+func (e *etcdImpl) doKeepAlive(key string, ttl uint64) {
+	log.Info("try watch", key)
+	time.Sleep(1 * time.Second)
+	conn, err := e.pool.Get()
+	if err != nil {
+		return
+	}
+
+	defer e.pool.Put(conn)
+	c := conn.(*PooledEtcdClient).c
+
+	resp, err := c.Get(key, false, false)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+
+	if resp.Node.Dir {
+		log.Error("can not set ttl to directory", key)
+		return
+	}
+
+	resp, err = c.Set(key, resp.Node.Value, ttl)
+	if resp == nil {
+		log.Error(err)
+		return
+	}
+}
+
 //todo:add test for keepAlive
 func (e *etcdImpl) keepAlive(key string, ttl uint64) {
 	go func() {
 		for {
-			log.Info("try watch", key)
-			time.Sleep(1 * time.Second)
-			conn, err := e.pool.Get()
-			if err != nil {
-				return
-			}
-
-			defer e.pool.Put(conn)
-			c := conn.(*PooledEtcdClient).c
-
-			resp, err := c.Get(key, false, false)
-			if err != nil {
-				log.Error(err)
-				return
-			}
-
-			if resp.Node.Dir {
-				log.Error("can not set ttl to directory", key)
-				return
-			}
-
-			resp, err = c.Set(key, resp.Node.Value, ttl)
-			if resp == nil {
-				log.Error(err)
-				return
-			}
+			e.doKeepAlive(key, ttl)
 		}
 	}()
 }
