@@ -52,8 +52,32 @@ func convertToZkError(err error) error {
 
 func convertToZkEvent(resp *etcd.Response, err error) zk.Event {
 	log.Infof("convert event %+v, %+v", resp, resp.Node)
-	//todo:implementation
-	return zk.Event{}
+
+	var e zk.Event
+
+	if err != nil {
+		e.Err = convertToZkError(err)
+		e.State = zk.StateDisconnected
+		return e
+	}
+
+	e.State = zk.StateConnected
+
+	switch resp.Action {
+	case "set":
+		e.Type = zk.EventNodeDataChanged
+	case "delete":
+		e.Type = zk.EventNodeDeleted
+	case "update":
+		//todo:check if just ttl changed
+		e.Type = zk.EventNodeDataChanged
+	case "create":
+		e.Type = zk.EventNodeCreated
+	}
+
+	e.Path = resp.Node.Key
+
+	return e
 }
 
 func NewEtcdConn(zkAddr string) (Conn, error) {
@@ -104,10 +128,21 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 	defer e.pool.Put(conn)
 	c := conn.(*PooledEtcdClient).c
 
-	resp, err = c.Get(key, true, false)
+	resp, err = c.Get(key, true, true)
 	if resp == nil {
 		return nil, nil, nil, convertToZkError(err)
 	}
+
+	maxIndex := resp.Node.ModifiedIndex
+	for _, n := range resp.Node.Nodes {
+		if n.ModifiedIndex > maxIndex {
+			maxIndex = n.ModifiedIndex
+		}
+	}
+
+	originVal := resp.Node.Value
+
+	log.Infof("convert event maxIndex: %d, %+v, %+v", maxIndex, resp, resp.Node)
 
 	ch := make(chan zk.Event, 100)
 
@@ -120,21 +155,31 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 		defer e.pool.Put(conn)
 		c := conn.(*PooledEtcdClient).c
 
-		//for {
-		//todo: should we use resp.Nodes's index or its children's max index
-		resp, err := c.Watch(key, index, children, nil, nil)
-		if err != nil {
-			log.Warning("watch", err)
+		for {
+			index++
+			resp, err := c.Watch(key, index, children, nil, nil)
+			if err != nil {
+				if ec, ok := err.(*etcd.EtcdError); ok {
+					if ec.ErrorCode == etcderr.EcodeEventIndexCleared {
+						index++
+						continue
+					}
+				}
+
+				log.Warning("watch", err)
+				ch <- convertToZkEvent(resp, err)
+				return
+			}
+
+			if originVal == string(resp.Node.Value) { //keep alive event
+				continue
+			}
+
+			log.Infof("got event %+v, %+v", resp, resp.Node)
+
 			ch <- convertToZkEvent(resp, err)
-			return
 		}
-
-		log.Infof("got event %+v, %+v", resp, resp.Node)
-
-		ch <- convertToZkEvent(resp, err)
-		index = resp.EtcdIndex
-		//	}
-	}(resp.Node.ModifiedIndex + 1)
+	}(maxIndex)
 
 	return resp, nil, ch, nil
 }
@@ -217,12 +262,11 @@ func (e *etcdImpl) ExistsW(key string) (exist bool, stat zk.Stat, watch <-chan z
 
 const MAX_TTL = 365 * 24 * 60 * 60
 
-func (e *etcdImpl) doKeepAlive(key string, ttl uint64) {
-	log.Info("try watch", key)
+func (e *etcdImpl) doKeepAlive(key string, ttl uint64) error {
 	time.Sleep(1 * time.Second)
 	conn, err := e.pool.Get()
 	if err != nil {
-		return
+		return err
 	}
 
 	defer e.pool.Put(conn)
@@ -231,26 +275,32 @@ func (e *etcdImpl) doKeepAlive(key string, ttl uint64) {
 	resp, err := c.Get(key, false, false)
 	if err != nil {
 		log.Error(err)
-		return
+		return err
 	}
 
 	if resp.Node.Dir {
 		log.Error("can not set ttl to directory", key)
-		return
+		return err
 	}
 
 	resp, err = c.Set(key, resp.Node.Value, ttl)
 	if resp == nil {
 		log.Error(err)
-		return
+		return err
 	}
+
+	return nil
 }
 
 //todo:add test for keepAlive
 func (e *etcdImpl) keepAlive(key string, ttl uint64) {
 	go func() {
 		for {
-			e.doKeepAlive(key, ttl)
+			err := e.doKeepAlive(key, ttl)
+			if err != nil {
+				log.Error(err)
+				return
+			}
 		}
 	}()
 }
