@@ -10,10 +10,26 @@ import (
 	"github.com/coreos/go-etcd/etcd"
 	zk "github.com/ngaut/go-zookeeper/zk"
 	log "github.com/ngaut/logging"
+	"github.com/ngaut/pools"
+	"sync"
 )
 
-type etcdImpl struct {
+var (
+	singleInstanceLock sync.Mutex
+	etcdInstance       *etcdImpl
+)
+
+type PooledEtcdClient struct {
 	c *etcd.Client
+}
+
+func (c *PooledEtcdClient) Close() {
+
+}
+
+type etcdImpl struct {
+	cluster string
+	pool    *pools.ResourcePool
 }
 
 func convertToZkError(err error) error {
@@ -40,15 +56,36 @@ func convertToZkEvent(resp *etcd.Response, err error) zk.Event {
 }
 
 func NewEtcdConn(zkAddr string) (Conn, error) {
-	e := &etcdImpl{c: etcd.NewClient(strings.Split(zkAddr, ","))}
-	if e == nil {
+	singleInstanceLock.Lock()
+	defer singleInstanceLock.Unlock()
+	if etcdInstance != nil {
+		return etcdInstance, nil
+	}
+
+	p := pools.NewResourcePool(func() (pools.Resource, error) {
+		return &PooledEtcdClient{c: etcd.NewClient(strings.Split(zkAddr, ","))}, nil
+	}, 10, 10, 0)
+
+	etcdInstance = &etcdImpl{cluster: zkAddr, pool: p}
+
+	log.Infof("new etcd %s", zkAddr)
+	if etcdInstance == nil {
 		return nil, errors.New("unknown error")
 	}
-	return e, nil
+
+	return etcdInstance, nil
 }
 
 func (e *etcdImpl) Get(key string) (data []byte, stat zk.Stat, err error) {
-	resp, err := e.c.Get(key, true, false)
+	conn, err := e.pool.Get()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	defer e.pool.Put(conn)
+	c := conn.(*PooledEtcdClient).c
+
+	resp, err := c.Get(key, true, false)
 	if resp == nil {
 		return nil, nil, convertToZkError(err)
 	}
@@ -57,7 +94,15 @@ func (e *etcdImpl) Get(key string) (data []byte, stat zk.Stat, err error) {
 }
 
 func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat zk.Stat, watch <-chan zk.Event, err error) {
-	resp, err = e.c.Get(key, true, false)
+	conn, err := e.pool.Get()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	defer e.pool.Put(conn)
+	c := conn.(*PooledEtcdClient).c
+
+	resp, err = c.Get(key, true, false)
 	if resp == nil {
 		return nil, nil, nil, convertToZkError(err)
 	}
@@ -67,7 +112,7 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 	go func(index uint64) {
 		//for {
 		//todo: should we use resp.Nodes's index or its children's max index
-		resp, err := e.c.Watch(key, index, children, nil, nil)
+		resp, err := c.Watch(key, index, children, nil, nil)
 		if err != nil {
 			log.Warning("watch", err)
 			ch <- convertToZkEvent(resp, err)
@@ -94,8 +139,16 @@ func (e *etcdImpl) GetW(key string) (data []byte, stat zk.Stat, watch <-chan zk.
 }
 
 func (e *etcdImpl) Children(key string) (children []string, stat zk.Stat, err error) {
+	conn, err := e.pool.Get()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	defer e.pool.Put(conn)
+	c := conn.(*PooledEtcdClient).c
+
 	log.Debug("Children", key)
-	resp, err := e.c.Get(key, true, false)
+	resp, err := c.Get(key, true, false)
 	if resp == nil {
 		return nil, nil, convertToZkError(err)
 	}
@@ -121,7 +174,15 @@ func (e *etcdImpl) ChildrenW(key string) (children []string, stat zk.Stat, watch
 }
 
 func (e *etcdImpl) Exists(key string) (exist bool, stat zk.Stat, err error) {
-	_, err = e.c.Get(key, true, false)
+	conn, err := e.pool.Get()
+	if err != nil {
+		return false, nil, err
+	}
+
+	defer e.pool.Put(conn)
+	c := conn.(*PooledEtcdClient).c
+
+	_, err = c.Get(key, true, false)
 	if err == nil {
 		return true, nil, nil
 	}
@@ -152,7 +213,15 @@ func (e *etcdImpl) keepAlive(key string, ttl uint64) {
 		for {
 			log.Info("try watch", key)
 			time.Sleep(1 * time.Second)
-			resp, err := e.c.Get(key, false, false)
+			conn, err := e.pool.Get()
+			if err != nil {
+				return
+			}
+
+			defer e.pool.Put(conn)
+			c := conn.(*PooledEtcdClient).c
+
+			resp, err := c.Get(key, false, false)
 			if err != nil {
 				log.Error(err)
 				return
@@ -163,7 +232,7 @@ func (e *etcdImpl) keepAlive(key string, ttl uint64) {
 				return
 			}
 
-			resp, err = e.c.Set(key, resp.Node.Value, ttl)
+			resp, err = c.Set(key, resp.Node.Value, ttl)
 			if resp == nil {
 				log.Error(err)
 				return
@@ -182,20 +251,27 @@ func (e *etcdImpl) Create(wholekey string, value []byte, flags int32, aclv []zk.
 
 	var resp *etcd.Response
 
-	fn := e.c.Create
+	conn, err := e.pool.Get()
+	if err != nil {
+		return "", err
+	}
+
+	defer e.pool.Put(conn)
+	c := conn.(*PooledEtcdClient).c
+
+	fn := c.Create
 	log.Info("create", wholekey)
 
 	if seq {
 		wholekey = path.Dir(wholekey)
-		fn = e.c.CreateInOrder
+		fn = c.CreateInOrder
 	} else {
 		for _, v := range aclv {
 			if v.Perms == PERM_DIRECTORY {
 				log.Info("etcdImpl:create directory", wholekey)
 				fn = nil
-				resp, err = e.c.CreateDir(wholekey, uint64(ttl))
+				resp, err = c.CreateDir(wholekey, uint64(ttl))
 				if err != nil {
-					log.Warning("etcdImpl:create directory", wholekey, err)
 					return "", convertToZkError(err)
 				}
 			}
@@ -226,26 +302,42 @@ func (e *etcdImpl) Set(key string, value []byte, version int32) (stat zk.Stat, e
 		return nil, errors.New("invalid version")
 	}
 
-	resp, err := e.c.Get(key, true, false)
+	conn, err := e.pool.Get()
+	if err != nil {
+		return nil, err
+	}
+
+	defer e.pool.Put(conn)
+	c := conn.(*PooledEtcdClient).c
+
+	resp, err := c.Get(key, true, false)
 	if resp == nil {
 		return nil, convertToZkError(err)
 	}
 
-	_, err = e.c.Set(key, string(value), uint64(resp.Node.TTL))
+	_, err = c.Set(key, string(value), uint64(resp.Node.TTL))
 	return nil, convertToZkError(err)
 }
 
 func (e *etcdImpl) Delete(key string, version int32) (err error) {
 	//todo: handle version
-	resp, err := e.c.Get(key, true, false)
+	conn, err := e.pool.Get()
+	if err != nil {
+		return err
+	}
+
+	defer e.pool.Put(conn)
+	c := conn.(*PooledEtcdClient).c
+
+	resp, err := c.Get(key, true, false)
 	if resp == nil {
 		return convertToZkError(err)
 	}
 
 	if resp.Node.Dir {
-		_, err = e.c.DeleteDir(key)
+		_, err = c.DeleteDir(key)
 	} else {
-		_, err = e.c.Delete(key, false)
+		_, err = c.Delete(key, false)
 	}
 
 	return convertToZkError(err)
@@ -260,5 +352,5 @@ func (e *etcdImpl) SetACL(key string, aclv []zk.ACL, version int32) (zk.Stat, er
 }
 
 func (e *etcdImpl) Close() {
-	//todo:how to implement it
+	//how to implement this
 }
