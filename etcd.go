@@ -6,12 +6,13 @@ import (
 	"strings"
 	"time"
 
+	"sync"
+
 	etcderr "github.com/coreos/etcd/error"
 	"github.com/coreos/go-etcd/etcd"
 	zk "github.com/ngaut/go-zookeeper/zk"
 	log "github.com/ngaut/logging"
 	"github.com/ngaut/pools"
-	"sync"
 )
 
 var (
@@ -73,6 +74,8 @@ func convertToZkEvent(resp *etcd.Response, err error) zk.Event {
 		e.Type = zk.EventNodeDataChanged
 	case "create":
 		e.Type = zk.EventNodeCreated
+	case "expire":
+		e.Type = zk.EventNotWatching
 	}
 
 	e.Path = resp.Node.Key
@@ -90,7 +93,7 @@ func NewEtcdConn(zkAddr string) (Conn, error) {
 	p := pools.NewResourcePool(func() (pools.Resource, error) {
 		log.Info("create a new etcd client")
 		return &PooledEtcdClient{c: etcd.NewClient(strings.Split(zkAddr, ","))}, nil
-	}, 10, 10, 0)
+	}, 10, 10, 3*time.Second)
 
 	etcdInstance = &etcdImpl{cluster: zkAddr, pool: p}
 
@@ -142,22 +145,21 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 
 	originVal := resp.Node.Value
 
-	log.Infof("convert event maxIndex: %d, %+v, %+v", maxIndex, resp, resp.Node)
-
 	ch := make(chan zk.Event, 100)
 
 	go func(index uint64) {
-		conn, err := e.pool.Get()
-		if err != nil {
-			return
-		}
-
-		defer e.pool.Put(conn)
-		c := conn.(*PooledEtcdClient).c
-
 		for {
+			conn, err := e.pool.Get()
+			if err != nil {
+				return
+			}
+
+			c := conn.(*PooledEtcdClient).c
+
 			index++
 			resp, err := c.Watch(key, index, children, nil, nil)
+			e.pool.Put(conn)
+
 			if err != nil {
 				if ec, ok := err.(*etcd.EtcdError); ok {
 					if ec.ErrorCode == etcderr.EcodeEventIndexCleared {
@@ -175,11 +177,11 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 				continue
 			}
 
-			log.Infof("got event %+v, %+v", resp, resp.Node)
+			log.Infof("got event %+v, %+v", resp, resp.Node.Key)
 
 			ch <- convertToZkEvent(resp, err)
 		}
-	}(maxIndex)
+	}(maxIndex - 1)
 
 	return resp, nil, ch, nil
 }
@@ -263,7 +265,6 @@ func (e *etcdImpl) ExistsW(key string) (exist bool, stat zk.Stat, watch <-chan z
 const MAX_TTL = 365 * 24 * 60 * 60
 
 func (e *etcdImpl) doKeepAlive(key string, ttl uint64) error {
-	time.Sleep(1 * time.Second)
 	conn, err := e.pool.Get()
 	if err != nil {
 		return err
@@ -283,6 +284,7 @@ func (e *etcdImpl) doKeepAlive(key string, ttl uint64) error {
 		return err
 	}
 
+	log.Info("keep alive ", key)
 	resp, err = c.Set(key, resp.Node.Value, ttl)
 	if resp == nil {
 		log.Error(err)
@@ -296,6 +298,7 @@ func (e *etcdImpl) doKeepAlive(key string, ttl uint64) error {
 func (e *etcdImpl) keepAlive(key string, ttl uint64) {
 	go func() {
 		for {
+			time.Sleep(1 * time.Second)
 			err := e.doKeepAlive(key, ttl)
 			if err != nil {
 				log.Error(err)

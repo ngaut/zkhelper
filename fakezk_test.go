@@ -147,7 +147,9 @@ func TestWatches(t *testing.T) {
 		t.Fatalf("conn.Create: %v", err)
 	}
 
-	fireWatch(t, watch)
+	if err := fireWatch(t, watch); err != nil {
+		t.Error(err)
+	}
 	// Updating sends an event to GetW.
 
 	_, _, watch, err = conn.GetW("/zk")
@@ -158,7 +160,10 @@ func TestWatches(t *testing.T) {
 	if _, err := conn.Set("/zk", []byte("foo"), -1); err != nil {
 		t.Errorf("conn.Set /zk: %v", err)
 	}
-	fireWatch(t, watch)
+
+	if err := fireWatch(t, watch); err != nil {
+		t.Error(err)
+	}
 
 	// Deleting sends an event to ExistsW and to ChildrenW of the
 	// parent.
@@ -176,19 +181,22 @@ func TestWatches(t *testing.T) {
 		t.Errorf("conn.Delete: %v", err)
 	}
 
-	fireWatch(t, watch)
-	fireWatch(t, parentWatch)
+	if err := fireWatch(t, watch); err != nil {
+		t.Error(err)
+	}
+	if err := fireWatch(t, parentWatch); err != nil {
+		t.Error(err)
+	}
 }
 
 func fireWatch(t *testing.T, watch <-chan zk.Event) error {
-	timer := time.NewTimer(50 * time.Millisecond)
+	timer := time.NewTimer(50000 * time.Millisecond)
 	select {
 	case <-watch:
 		// TODO(szopa): Figure out what's the exact type of
 		// event.
 		return nil
 	case <-timer.C:
-		t.Errorf("watch didn't get event")
 		return errors.New("timeout")
 	}
 

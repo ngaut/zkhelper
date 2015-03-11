@@ -145,7 +145,9 @@ func TestEtcdWatches(t *testing.T) {
 		t.Fatalf("conn.Set: %v", err)
 	}
 
-	fireWatch(t, watch)
+	if err := fireWatch(t, watch); err != nil {
+		t.Error(err)
+	}
 
 	// Creating a child sends an event to ChildrenW.
 	_, _, watch, err = conn.ChildrenW("/zk")
@@ -156,9 +158,12 @@ func TestEtcdWatches(t *testing.T) {
 		t.Fatalf("conn.Create: %v", err)
 	}
 
-	fireWatch(t, watch)
-	// Updating sends an event to GetW.
+	if err := fireWatch(t, watch); err != nil {
+		t.Error(err)
+		return
+	}
 
+	// Updating sends an event to GetW.
 	_, _, watch, err = conn.GetW("/zk/foo")
 	if err != nil {
 		t.Errorf(`conn.GetW("/zk"): %v`, err)
@@ -167,7 +172,10 @@ func TestEtcdWatches(t *testing.T) {
 	if _, err := conn.Set("/zk/foo", []byte("foo"), -1); err != nil {
 		t.Errorf("conn.Set /zk: %v", err)
 	}
-	fireWatch(t, watch)
+
+	if err := fireWatch(t, watch); err != nil {
+		t.Error(err)
+	}
 
 	// Deleting sends an event to ExistsW and to ChildrenW of the
 	// parent.
@@ -185,9 +193,13 @@ func TestEtcdWatches(t *testing.T) {
 		t.Errorf("conn.Delete: %v", err)
 	}
 
-	fireWatch(t, watch)
-	fireWatch(t, parentWatch)
+	if err := fireWatch(t, watch); err != nil {
+		t.Error(err)
+	}
 
+	if err := fireWatch(t, parentWatch); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestEtcdSequence(t *testing.T) {
