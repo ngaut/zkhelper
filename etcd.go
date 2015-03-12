@@ -51,8 +51,8 @@ func convertToZkError(err error) error {
 	return err
 }
 
-func convertToZkEvent(resp *etcd.Response, err error) zk.Event {
-	log.Infof("convert event %+v, %+v", resp, resp.Node)
+func convertToZkEvent(watchPath string, resp *etcd.Response, err error) zk.Event {
+	//log.Infof("convert event from path:%s, %+v, %+v", watchPath, resp, resp.Node.Key)
 
 	var e zk.Event
 
@@ -63,6 +63,12 @@ func convertToZkEvent(resp *etcd.Response, err error) zk.Event {
 	}
 
 	e.State = zk.StateConnected
+
+	e.Path = resp.Node.Key
+	if len(resp.Node.Key) > len(watchPath) {
+		e.Type = zk.EventNodeChildrenChanged
+		return e
+	}
 
 	switch resp.Action {
 	case "set":
@@ -78,8 +84,6 @@ func convertToZkEvent(resp *etcd.Response, err error) zk.Event {
 		e.Type = zk.EventNotWatching
 	}
 
-	e.Path = resp.Node.Key
-
 	return e
 }
 
@@ -91,7 +95,7 @@ func NewEtcdConn(zkAddr string) (Conn, error) {
 	}
 
 	p := pools.NewResourcePool(func() (pools.Resource, error) {
-		log.Info("create a new etcd client")
+		//log.Info("create a new etcd client")
 		return &PooledEtcdClient{c: etcd.NewClient(strings.Split(zkAddr, ","))}, nil
 	}, 10, 10, 3*time.Second)
 
@@ -143,14 +147,16 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 		}
 	}
 
-	originVal := resp.Node.Value
+	ch := make(chan zk.Event, 10000)
+	log.Info("try watch", key)
 
-	ch := make(chan zk.Event, 100)
+	originVal := resp.Node.Value
 
 	go func(index uint64) {
 		for {
 			conn, err := e.pool.Get()
 			if err != nil {
+				log.Error(err)
 				return
 			}
 
@@ -163,23 +169,22 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 			if err != nil {
 				if ec, ok := err.(*etcd.EtcdError); ok {
 					if ec.ErrorCode == etcderr.EcodeEventIndexCleared {
-						index++
 						continue
 					}
 				}
 
 				log.Warning("watch", err)
-				ch <- convertToZkEvent(resp, err)
+				ch <- convertToZkEvent(key, resp, err)
 				return
 			}
 
-			if originVal == string(resp.Node.Value) { //keep alive event
+			if key == resp.Node.Key && originVal == string(resp.Node.Value) { //keep alive event
 				continue
 			}
 
-			log.Infof("got event %+v, %+v", resp, resp.Node.Key)
+			log.Infof("got event current index %d, %+v, %+v", index, resp, resp.Node.Key)
 
-			ch <- convertToZkEvent(resp, err)
+			ch <- convertToZkEvent(key, resp, err)
 		}
 	}(maxIndex - 1)
 
@@ -284,7 +289,7 @@ func (e *etcdImpl) doKeepAlive(key string, ttl uint64) error {
 		return err
 	}
 
-	log.Info("keep alive ", key)
+	//log.Info("keep alive ", key)
 	resp, err = c.Set(key, resp.Node.Value, ttl)
 	if resp == nil {
 		log.Error(err)
