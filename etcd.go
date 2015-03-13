@@ -140,19 +140,12 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 		return nil, nil, nil, convertToZkError(err)
 	}
 
-	maxIndex := resp.Node.ModifiedIndex
-	for _, n := range resp.Node.Nodes {
-		if n.ModifiedIndex > maxIndex {
-			maxIndex = n.ModifiedIndex
-		}
-	}
-
-	ch := make(chan zk.Event, 10000)
+	ch := make(chan zk.Event, 100)
 	log.Info("try watch", key)
 
 	originVal := resp.Node.Value
 
-	go func(index uint64) {
+	go func() {
 		for {
 			conn, err := e.pool.Get()
 			if err != nil {
@@ -162,17 +155,10 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 
 			c := conn.(*PooledEtcdClient).c
 
-			index++
-			resp, err := c.Watch(key, index, children, nil, nil)
+			resp, err := c.Watch(key, 0, children, nil, nil)
 			e.pool.Put(conn)
 
 			if err != nil {
-				if ec, ok := err.(*etcd.EtcdError); ok {
-					if ec.ErrorCode == etcderr.EcodeEventIndexCleared {
-						continue
-					}
-				}
-
 				log.Warning("watch", err)
 				ch <- convertToZkEvent(key, resp, err)
 				return
@@ -182,13 +168,20 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 				continue
 			}
 
-			log.Infof("got event current index %d, %+v, %+v", index, resp, resp.Node.Key)
+			log.Infof("got event current  %+v, %+v", resp, resp.Node.Key)
 
 			ch <- convertToZkEvent(key, resp, err)
+			return
 		}
-	}(maxIndex - 1)
+	}()
 
-	return resp, nil, ch, nil
+	//get the newest value
+	respNew, err := c.Get(key, true, true)
+	if respNew == nil {
+		return nil, nil, nil, convertToZkError(err)
+	}
+
+	return respNew, nil, ch, nil
 }
 
 func (e *etcdImpl) GetW(key string) (data []byte, stat zk.Stat, watch <-chan zk.Event, err error) {
