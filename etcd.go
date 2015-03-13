@@ -2,11 +2,11 @@ package zkhelper
 
 import (
 	"errors"
+	"fmt"
 	"path"
 	"strings"
-	"time"
-
 	"sync"
+	"time"
 
 	etcderr "github.com/coreos/etcd/error"
 	"github.com/coreos/go-etcd/etcd"
@@ -28,9 +28,15 @@ func (c *PooledEtcdClient) Close() {
 
 }
 
+func (e *etcdImpl) Seq2Str(seq int64) string {
+	return fmt.Sprintf("%d", seq)
+}
+
 type etcdImpl struct {
-	cluster string
-	pool    *pools.ResourcePool
+	sync.Mutex
+	cluster  string
+	pool     *pools.ResourcePool
+	indexMap map[string]uint64
 }
 
 func convertToZkError(err error) error {
@@ -97,9 +103,13 @@ func NewEtcdConn(zkAddr string) (Conn, error) {
 	p := pools.NewResourcePool(func() (pools.Resource, error) {
 		//log.Info("create a new etcd client")
 		return &PooledEtcdClient{c: etcd.NewClient(strings.Split(zkAddr, ","))}, nil
-	}, 10, 10, 3*time.Second)
+	}, 10, 10, 0)
 
-	etcdInstance = &etcdImpl{cluster: zkAddr, pool: p}
+	etcdInstance = &etcdImpl{
+		cluster:  zkAddr,
+		pool:     p,
+		indexMap: make(map[string]uint64),
+	}
 
 	log.Infof("new etcd %s", zkAddr)
 	if etcdInstance == nil {
@@ -126,6 +136,22 @@ func (e *etcdImpl) Get(key string) (data []byte, stat zk.Stat, err error) {
 	return []byte(resp.Node.Value), nil, nil
 }
 
+func (e *etcdImpl) setIndex(key string, index uint64) {
+	e.Lock()
+	defer e.Unlock()
+
+	e.indexMap[key] = index
+}
+
+func (e *etcdImpl) getIndex(key string) uint64 {
+	e.Lock()
+	defer e.Unlock()
+
+	index := e.indexMap[key]
+
+	return index
+}
+
 func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat zk.Stat, watch <-chan zk.Event, err error) {
 	conn, err := e.pool.Get()
 	if err != nil {
@@ -134,10 +160,20 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 
 	defer e.pool.Put(conn)
 	c := conn.(*PooledEtcdClient).c
-
+	index := e.getIndex(key)
 	resp, err = c.Get(key, true, true)
 	if resp == nil {
 		return nil, nil, nil, convertToZkError(err)
+	}
+
+	if index < resp.Node.ModifiedIndex {
+		index = resp.Node.ModifiedIndex
+	}
+
+	for _, n := range resp.Node.Nodes {
+		if n.ModifiedIndex > index {
+			index = n.ModifiedIndex
+		}
 	}
 
 	ch := make(chan zk.Event, 100)
@@ -146,6 +182,10 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 	originVal := resp.Node.Value
 
 	go func() {
+		defer func() {
+			e.setIndex(key, index)
+		}()
+
 		for {
 			conn, err := e.pool.Get()
 			if err != nil {
@@ -155,33 +195,42 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 
 			c := conn.(*PooledEtcdClient).c
 
-			resp, err := c.Watch(key, 0, children, nil, nil)
+			resp, err := c.Watch(key, index, children, nil, nil)
 			e.pool.Put(conn)
 
 			if err != nil {
+				if ec, ok := err.(*etcd.EtcdError); ok {
+					if ec.ErrorCode == etcderr.EcodeEventIndexCleared {
+						index++
+						continue
+					}
+				}
+
 				log.Warning("watch", err)
 				ch <- convertToZkEvent(key, resp, err)
 				return
 			}
 
 			if key == resp.Node.Key && originVal == string(resp.Node.Value) { //keep alive event
+				index++
 				continue
 			}
 
-			log.Infof("got event current  %+v, %+v", resp, resp.Node.Key)
+			log.Infof("got event current index %d, %+v, %+v", index, resp, resp.Node.Key)
 
 			ch <- convertToZkEvent(key, resp, err)
+
+			log.Infof("send event current index %d, %+v, %+v", index, resp, resp.Node.Key)
+			if index <= resp.Node.ModifiedIndex {
+				index = resp.Node.ModifiedIndex + 1
+			} else {
+				index++
+			}
 			return
 		}
 	}()
 
-	//get the newest value
-	respNew, err := c.Get(key, true, true)
-	if respNew == nil {
-		return nil, nil, nil, convertToZkError(err)
-	}
-
-	return respNew, nil, ch, nil
+	return resp, nil, ch, nil
 }
 
 func (e *etcdImpl) GetW(key string) (data []byte, stat zk.Stat, watch <-chan zk.Event, err error) {
@@ -202,7 +251,6 @@ func (e *etcdImpl) Children(key string) (children []string, stat zk.Stat, err er
 	defer e.pool.Put(conn)
 	c := conn.(*PooledEtcdClient).c
 
-	log.Debug("Children", key)
 	resp, err := c.Get(key, true, false)
 	if resp == nil {
 		return nil, nil, convertToZkError(err)
@@ -225,7 +273,7 @@ func (e *etcdImpl) ChildrenW(key string) (children []string, stat zk.Stat, watch
 		children = append(children, path.Base(c.Key))
 	}
 
-	return
+	return children, stat, watch, nil
 }
 
 func (e *etcdImpl) Exists(key string) (exist bool, stat zk.Stat, err error) {

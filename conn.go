@@ -48,4 +48,6 @@ type Conn interface {
 
 	GetACL(path string) ([]zk.ACL, zk.Stat, error)
 	SetACL(path string, aclv []zk.ACL, version int32) (zk.Stat, error)
+
+	Seq2Str(seq int64) string
 }

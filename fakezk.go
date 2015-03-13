@@ -35,6 +35,10 @@ func (conn *zconn) getZxid() int64 {
 	return conn.zxid
 }
 
+func (conn *zconn) Seq2Str(seq int64) string {
+	return fmt.Sprintf("%0.10d", seq)
+}
+
 // NewConn returns a fake zk.Conn implementation. Data is stored in
 // memory, and there's a global connection lock for concurrent access.
 func NewConn() Conn {

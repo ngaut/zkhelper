@@ -41,12 +41,21 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
+type MyZkConn struct {
+	Conn
+}
+
+func (conn *MyZkConn) Seq2Str(seq int64) string {
+	return fmt.Sprintf("%0.10d", seq)
+}
+
 func ConnectToZk(zkAddr string) (Conn, error) {
 	zkConn, _, err := zk.Connect(strings.Split(zkAddr, ","), 3*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	return zkConn, nil
+
+	return &MyZkConn{Conn: zkConn}, nil
 }
 
 func DefaultACLs() []zk.ACL {
