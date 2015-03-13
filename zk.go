@@ -42,7 +42,7 @@ func init() {
 }
 
 type MyZkConn struct {
-	Conn
+	*zk.Conn
 }
 
 func (conn *MyZkConn) Seq2Str(seq int64) string {
