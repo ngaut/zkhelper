@@ -59,7 +59,6 @@ func convertToZkError(err error) error {
 
 func convertToZkEvent(watchPath string, resp *etcd.Response, err error) zk.Event {
 	//log.Infof("convert event from path:%s, %+v, %+v", watchPath, resp, resp.Node.Key)
-
 	var e zk.Event
 
 	if err != nil {
@@ -176,9 +175,8 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 		}
 	}
 
-	ch := make(chan zk.Event, 100)
 	log.Info("try watch", key)
-
+	ch := make(chan zk.Event, 100)
 	originVal := resp.Node.Value
 
 	go func() {
@@ -216,11 +214,8 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 				continue
 			}
 
-			log.Infof("got event current index %d, %+v, %+v", index, resp, resp.Node.Key)
-
 			ch <- convertToZkEvent(key, resp, err)
 
-			log.Infof("send event current index %d, %+v, %+v", index, resp, resp.Node.Key)
 			if index <= resp.Node.ModifiedIndex {
 				index = resp.Node.ModifiedIndex + 1
 			} else {
