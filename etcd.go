@@ -40,7 +40,7 @@ type etcdImpl struct {
 }
 
 func convertToZkError(err error) error {
-	//todo:implementation
+	//todo: convert other errors
 	if ec, ok := err.(*etcd.EtcdError); ok {
 		switch ec.ErrorCode {
 		case etcderr.EcodeKeyNotFound:
@@ -81,7 +81,6 @@ func convertToZkEvent(watchPath string, resp *etcd.Response, err error) zk.Event
 	case "delete":
 		e.Type = zk.EventNodeDeleted
 	case "update":
-		//todo:check if just ttl changed
 		e.Type = zk.EventNodeDataChanged
 	case "create":
 		e.Type = zk.EventNodeCreated
@@ -100,7 +99,6 @@ func NewEtcdConn(zkAddr string) (Conn, error) {
 	}
 
 	p := pools.NewResourcePool(func() (pools.Resource, error) {
-		//log.Info("create a new etcd client")
 		return &PooledEtcdClient{c: etcd.NewClient(strings.Split(zkAddr, ","))}, nil
 	}, 10, 10, 0)
 
@@ -215,7 +213,7 @@ func (e *etcdImpl) watch(key string, children bool) (resp *etcd.Response, stat z
 			}
 
 			ch <- convertToZkEvent(key, resp, err)
-
+			//update index
 			if index <= resp.Node.ModifiedIndex {
 				index = resp.Node.ModifiedIndex + 1
 			} else {
@@ -326,7 +324,7 @@ func (e *etcdImpl) doKeepAlive(key string, ttl uint64) error {
 	}
 
 	//log.Info("keep alive ", key)
-	resp, err = c.Set(key, resp.Node.Value, ttl)
+	resp, err = c.CompareAndSwap(key, resp.Node.Value, ttl, resp.Node.Value, resp.Node.ModifiedIndex)
 	if resp == nil {
 		log.Error(err)
 		return err
