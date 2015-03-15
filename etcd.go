@@ -319,18 +319,20 @@ func (e *etcdImpl) doKeepAlive(key string, ttl uint64) error {
 	}
 
 	if resp.Node.Dir {
-		log.Error("can not set ttl to directory", key)
-		return err
+		return fmt.Errorf("can not set ttl to directory", key)
 	}
 
 	//log.Info("keep alive ", key)
 	resp, err = c.CompareAndSwap(key, resp.Node.Value, ttl, resp.Node.Value, resp.Node.ModifiedIndex)
-	if resp == nil {
-		log.Error(err)
-		return err
+	if err == nil {
+		return nil
 	}
 
-	return nil
+	if ec, ok := err.(*etcd.EtcdError); ok && ec.ErrorCode == etcderr.EcodeTestFailed {
+		return nil
+	}
+
+	return err
 }
 
 //todo:add test for keepAlive
