@@ -13,7 +13,7 @@ import (
 
 // Make sure Stat implements the interface.
 var _ zk.Stat = stat{}
-var testServer = "http://localhost:4001"
+var testServer = "localhost:4001"
 
 func TestEtcdBasic(t *testing.T) {
 	conn, _ := NewEtcdConn(testServer)

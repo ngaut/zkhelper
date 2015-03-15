@@ -99,7 +99,13 @@ func NewEtcdConn(zkAddr string) (Conn, error) {
 	}
 
 	p := pools.NewResourcePool(func() (pools.Resource, error) {
-		return &PooledEtcdClient{c: etcd.NewClient(strings.Split(zkAddr, ","))}, nil
+		cluster := strings.Split(zkAddr, ",")
+		for i, addr := range cluster {
+			if strings.Index(addr, "http://") != 0 {
+				cluster[i] = "http://" + addr
+			}
+		}
+		return &PooledEtcdClient{c: etcd.NewClient(cluster)}, nil
 	}, 10, 10, 0)
 
 	etcdInstance = &etcdImpl{
