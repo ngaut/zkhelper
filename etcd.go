@@ -101,7 +101,7 @@ func NewEtcdConn(zkAddr string) (Conn, error) {
 	p := pools.NewResourcePool(func() (pools.Resource, error) {
 		cluster := strings.Split(zkAddr, ",")
 		for i, addr := range cluster {
-			if strings.Index(addr, "http://") != 0 {
+			if !strings.HasPrefix(addr, "http://") {
 				cluster[i] = "http://" + addr
 			}
 		}
