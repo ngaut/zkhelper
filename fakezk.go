@@ -339,13 +339,12 @@ func (conn *zconn) Delete(zkPath string, version int32) (err error) {
 func (conn *zconn) Close() {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
-
-	for _, watches := range conn.existWatches {
-		for _, c := range watches {
-			close(c)
+		for _, watches := range conn.existWatches {
+			for _, c := range watches {
+				close(c)
+			}
 		}
-	}
-	conn.root.closeAllWatches()
+		conn.root.closeAllWatches()
 }
 
 /*

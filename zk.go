@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/ngaut/go-zookeeper/zk"
-	log "github.com/ngaut/logging"
+	"github.com/ngaut/log"
 )
 
 var (

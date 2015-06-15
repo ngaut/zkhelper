@@ -11,7 +11,7 @@ import (
 	etcderr "github.com/coreos/etcd/error"
 	"github.com/coreos/go-etcd/etcd"
 	zk "github.com/ngaut/go-zookeeper/zk"
-	log "github.com/ngaut/logging"
+	"github.com/ngaut/log"
 	"github.com/ngaut/pools"
 )
 
