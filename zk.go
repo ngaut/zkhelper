@@ -58,6 +58,15 @@ func ConnectToZk(zkAddr string) (Conn, error) {
 	return &MyZkConn{Conn: zkConn}, nil
 }
 
+func ConnectToZkWithTimeout(zkAddr string, recvTime time.Duration) (Conn, error) {
+	zkConn, _, err := zk.Connect(strings.Split(zkAddr, ","), recvTime)
+	if err != nil {
+		return nil, err
+	}
+
+	return &MyZkConn{Conn: zkConn}, nil
+}
+
 func DefaultACLs() []zk.ACL {
 	return zk.WorldACL(zk.PermAll)
 }
