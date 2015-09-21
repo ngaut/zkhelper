@@ -105,7 +105,9 @@ func NewEtcdConn(zkAddr string) (Conn, error) {
 				cluster[i] = "http://" + addr
 			}
 		}
-		return &PooledEtcdClient{c: etcd.NewClient(cluster)}, nil
+		newClient := etcd.NewClient(cluster)
+		newClient.SetConsistency(etcd.STRONG_CONSISTENCY)
+		return &PooledEtcdClient{c: newClient}, nil
 	}, 10, 10, 0)
 
 	etcdInstance = &etcdImpl{
