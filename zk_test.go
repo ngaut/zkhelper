@@ -14,13 +14,30 @@
 package zkhelper
 
 import (
+	"encoding/json"
+	"flag"
 	"sync"
 	"testing"
 	"time"
+
+	. "github.com/pingcap/check"
 )
+
+var zkAddr = flag.String("zk", ":2181", "zookeeper address")
+
+func TestT(t *testing.T) {
+	TestingT(t)
+}
+
+var _ = Suite(&testElectorSuite{})
+
+type testElectorSuite struct {
+	wg sync.WaitGroup
+}
 
 type testTask struct {
 	quit chan struct{}
+	id   string
 }
 
 func (t *testTask) Run() error {
@@ -32,13 +49,13 @@ func (t *testTask) Run() error {
 		case <-t.quit:
 			return nil
 		case <-ticker.C:
-			println("task run")
+			println("task run", t.id)
 		}
 	}
 }
 
 func (t *testTask) Stop() {
-	println("task stop")
+	println("task stop", t.id)
 }
 
 func (t *testTask) Interrupted() bool {
@@ -50,32 +67,66 @@ func (t *testTask) Interrupted() bool {
 	}
 }
 
-func TestElection(t *testing.T) {
-	conn := NewConn()
-	defer conn.Close()
-
-	contents := map[string]interface{}{
-		"addr": "127.0.0.1:1234",
-	}
-
-	ze, err := CreateElectionWithContents(conn, "/zk", contents)
-	if err != nil {
-		t.Fatal(err)
-	}
+func (s *testElectorSuite) runTask(c *C, conn Conn, id string) *testTask {
+	ze, err := CreateElectionWithContents(conn, "/zk/leader_test", map[string]interface{}{
+		"id": id,
+	})
 
 	task := &testTask{
 		quit: make(chan struct{}, 1),
+		id:   id,
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	c.Assert(err, IsNil)
+	s.wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer s.wg.Done()
 		ze.RunTask(task)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
-	close(task.quit)
+	return task
+}
 
-	wg.Wait()
+func (s *testElectorSuite) TestElection(c *C) {
+	c1 := s.getConn(c)
+	defer c1.Close()
+
+	c2 := s.getConn(c)
+	defer c2.Close()
+
+	task1 := s.runTask(c, c1, "1")
+	time.Sleep(500 * time.Millisecond)
+
+	task2 := s.runTask(c, c2, "2")
+	time.Sleep(500 * time.Millisecond)
+
+	s.checkLeader(c, "1")
+	close(task1.quit)
+
+	time.Sleep(500 * time.Millisecond)
+	s.checkLeader(c, "2")
+
+	close(task2.quit)
+
+	s.wg.Wait()
+}
+
+func (s *testElectorSuite) getConn(c *C) Conn {
+	conn, err := ConnectToZkWithTimeout(*zkAddr, time.Second)
+	c.Assert(err, IsNil)
+	return conn
+}
+
+func (s *testElectorSuite) checkLeader(c *C, id string) {
+	conn := s.getConn(c)
+	defer conn.Close()
+
+	data, _, err := conn.Get("/zk/leader_test/leader")
+	c.Assert(err, IsNil)
+
+	var m map[string]interface{}
+	err = json.Unmarshal(data, &m)
+	c.Assert(err, IsNil)
+
+	c.Assert(m["id"], Equals, id)
 }
