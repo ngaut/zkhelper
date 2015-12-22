@@ -545,14 +545,31 @@ type zMutex struct {
 // by Unlock. You can clean up a mutex with delete, but you should be
 // careful doing so.
 func CreateMutex(zconn Conn, zkPath string) ZLocker {
-	hostname, err := os.Hostname()
+	zm, err := CreateMutexWithContents(zconn, zkPath, map[string]interface{}{})
 	if err != nil {
 		panic(err) // should never happen
 	}
-	pid := os.Getpid()
-	contents := fmt.Sprintf(`{"hostname": "%v", "pid": %v}`, hostname, pid)
+	return zm
+}
 
-	return &zMutex{zconn: zconn, path: zkPath, contents: contents, interrupted: make(chan struct{})}
+// CreateMutex initializes an unaquired mutex with special content for this mutex.
+// A mutex is released only by Unlock. You can clean up a mutex with delete, but you should be
+// careful doing so.
+func CreateMutexWithContents(zconn Conn, zkPath string, contents map[string]interface{}) (ZLocker, error) {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return nil, err
+	}
+	pid := os.Getpid()
+	contents["hostname"] = hostname
+	contents["pid"] = pid
+
+	data, err := json.Marshal(contents)
+	if err != nil {
+		return nil, err
+	}
+
+	return &zMutex{zconn: zconn, path: zkPath, contents: string(data), interrupted: make(chan struct{})}, nil
 }
 
 // Interrupt releases a lock that's held.
@@ -749,9 +766,26 @@ type ElectorTask interface {
 // candidate. It's better to think of this as a stream of events that
 // one needs to react to.
 func CreateElection(zconn Conn, zkPath string) ZElector {
-	zm := CreateMutex(zconn, path.Join(zkPath, "candidates")).(*zMutex)
+	zm, err := CreateElectionWithContents(zconn, zkPath, map[string]interface{}{})
+	if err != nil {
+		// should never happend
+		panic(err)
+	}
+	return zm
+}
+
+// CreateElection returns an initialized elector with special contents. An election is
+// really a cycle of events. You are flip-flopping between leader and
+// candidate. It's better to think of this as a stream of events that
+// one needs to react to.
+func CreateElectionWithContents(zconn Conn, zkPath string, contents map[string]interface{}) (ZElector, error) {
+	l, err := CreateMutexWithContents(zconn, path.Join(zkPath, "candidates"), contents)
+	if err != nil {
+		return ZElector{}, err
+	}
+	zm := l.(*zMutex)
 	zm.ephemeral = true
-	return ZElector{zMutex: zm, path: zkPath}
+	return ZElector{zMutex: zm, path: zkPath}, nil
 }
 
 // RunTask returns nil when the underlyingtask ends or the error it
